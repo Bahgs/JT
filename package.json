@@ -1,0 +1,23 @@
+{
+  "name": "ticketmaster-inventory-mvp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CLI MVP for extracting Ticketmaster inventory via Playwright network interception.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "playwright": "^1.58.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  },
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
