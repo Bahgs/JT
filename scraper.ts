@@ -190,7 +190,34 @@ async function run() {
   if (ticketBlocks.length === 0) {
     console.log("No ticket data found.")
   } else {
-    for (const item of ticketBlocks) {
+    function getRowValue(row: string | null): number {
+      if (!row) return -1
+      const num = parseInt(row)
+      if (!isNaN(num)) return num
+      return row
+        .split("")
+        .reduce((acc, char) => acc * 26 + char.charCodeAt(0), 0)
+    }
+
+    const sectionMap: Record<string, TicketBlock[]> = {}
+    for (const block of ticketBlocks) {
+      if (!sectionMap[block.section]) {
+        sectionMap[block.section] = []
+      }
+      sectionMap[block.section].push(block)
+    }
+
+    const finalBlocks: TicketBlock[] = []
+    for (const section in sectionMap) {
+      const blocksInSection = sectionMap[section]
+      const maxRowValue = Math.max(...blocksInSection.map((b) => getRowValue(b.row)))
+      const lastRowBlocks = blocksInSection.filter(
+        (b) => getRowValue(b.row) === maxRowValue
+      )
+      finalBlocks.push(...lastRowBlocks)
+    }
+
+    for (const item of finalBlocks) {
       const priceText = item.price == null ? "N/A" : `$${item.price.toFixed(2)}`
       const rowText = item.row ?? "N/A"
       const seatList = item.seats.join(",")
