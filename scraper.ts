@@ -9,6 +9,7 @@ type TicketBlock = {
   quantity: number
   price: number | null
   inventoryType: "primary"
+  isLargeBlock: boolean
 }
 
 const TARGET_KEYWORDS = ["quickpicks", "facets", "availability", "inventory", "seat"]
@@ -60,6 +61,15 @@ function parseQuickpicksPriceMap(quickpicksData: unknown): PriceMap {
   return priceMap
 }
 
+function isConsecutive(seats: string[]): boolean {
+  if (seats.length === 0) return false
+  const sorted = seats.map(Number).sort((a, b) => a - b)
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] !== sorted[i - 1] + 1) return false
+  }
+  return true
+}
+
 function buildTicketBlocksFromQuickpicks(
   quickpicksData: unknown,
   priceMap: PriceMap
@@ -85,14 +95,29 @@ function buildTicketBlocksFromQuickpicks(
           .filter(Boolean)
       : []
 
-    const seats: string[] = Array.isArray(pick.offerGroups?.[0]?.seats)
+    // Prefer offerGroups seats; fall back to top-level places/seats
+    const groupSeats: string[] = Array.isArray(pick.offerGroups?.[0]?.seats)
       ? pick.offerGroups[0].seats
           .map((s: unknown) => String(s ?? "").trim())
           .filter(Boolean)
       : []
 
+    const placesSeats: string[] = Array.isArray(pick.places)
+      ? pick.places.map((s: unknown) => String(s ?? "").trim()).filter(Boolean)
+      : Array.isArray(pick.seats)
+        ? pick.seats.map((s: unknown) => String(s ?? "").trim()).filter(Boolean)
+        : []
+
+    const seats = groupSeats.length > 0 ? groupSeats : placesSeats
+
+    const quantity = seats.length
+
+    if (quantity < 2) continue
+    if (!isConsecutive(seats)) continue
+
     const offerId = offers[0] ?? ""
     const price = offerId && priceMap[offerId] != null ? priceMap[offerId] : null
+    const isLargeBlock = quantity >= 4
 
     console.log("PARSED:", section, row, seats)
 
@@ -100,12 +125,14 @@ function buildTicketBlocksFromQuickpicks(
       section,
       row,
       seats,
-      quantity: seats.length,
+      quantity,
       price,
-      inventoryType: "primary"
+      inventoryType: "primary",
+      isLargeBlock
     })
   }
 
+  console.log("TOTAL BLOCKS:", blocks.length)
   return blocks
 }
 
@@ -163,33 +190,12 @@ async function run() {
   if (ticketBlocks.length === 0) {
     console.log("No ticket data found.")
   } else {
-    function getRowValue(row: string | null): number {
-      if (!row) return -1
-      return row.charCodeAt(0)
-    }
-
-    function selectLastRow(blocks: TicketBlock[]): TicketBlock {
-      return blocks.reduce((max, curr) =>
-        getRowValue(curr.row) > getRowValue(max.row) ? curr : max
-      )
-    }
-
-    const sectionMap: Record<string, TicketBlock[]> = {}
-    for (const block of ticketBlocks) {
-      if (!sectionMap[block.section]) {
-        sectionMap[block.section] = []
-      }
-      sectionMap[block.section].push(block)
-    }
-
-    const lastRowBlocks = Object.values(sectionMap).map(selectLastRow)
-
-    for (const item of lastRowBlocks) {
+    for (const item of ticketBlocks) {
       const priceText = item.price == null ? "N/A" : `$${item.price.toFixed(2)}`
       const rowText = item.row ?? "N/A"
       const seatList = item.seats.join(",")
       console.log(
-        `Section ${item.section} | Row ${rowText} | Seats ${seatList} | Price ${priceText}`
+        `Section ${item.section} | Row ${rowText} | Seats ${seatList} | Qty ${item.quantity} | Price ${priceText} | LargeBlock ${item.isLargeBlock}`
       )
     }
   }
