@@ -320,7 +320,7 @@ function buildTicketBlocksFromPicks(
 }
 
 function consolidateSeatBlocks(blocks: TicketBlock[]): TicketBlock[] {
-  // Group by section + row
+  // Group by section + row — all qty-variant blocks for the same location merge here
   const groupMap: Record<string, TicketBlock[]> = {}
   for (const block of blocks) {
     const key = `${block.section}|||${block.row ?? ""}`
@@ -334,15 +334,15 @@ function consolidateSeatBlocks(blocks: TicketBlock[]): TicketBlock[] {
     const group = groupMap[key]
     const { section, row } = group[0]
 
-    // Build seat-number → best per-ticket price map so we preserve prices
-    // through the merge. When the same seat appears in multiple blocks
-    // (from different qty variants), we keep the lowest per-ticket price.
+    // ── Step 1: collect every seat seen across ALL blocks for this section+row.
+    // seat number → lowest per-ticket price seen for that seat
     const seatPriceMap = new Map<number, number | null>()
 
     for (const block of group) {
       const pt = block.pricePerTicket
       for (const s of block.seats) {
         const n = Number(s)
+        if (isNaN(n)) continue // non-numeric seat labels can't be merged numerically
         const existing = seatPriceMap.get(n)
         if (existing === undefined) {
           seatPriceMap.set(n, pt)
@@ -352,27 +352,38 @@ function consolidateSeatBlocks(blocks: TicketBlock[]): TicketBlock[] {
       }
     }
 
-    const allSeatNums = [...seatPriceMap.keys()].sort((a, b) => a - b)
-    if (allSeatNums.length === 0) continue
+    // ── Step 2: sort all unique seat numbers numerically
+    const mergedSeats = [...seatPriceMap.keys()].sort((a, b) => a - b)
+    if (mergedSeats.length === 0) continue
 
-    // Split into consecutive runs
+    // ── Step 3: split into the longest possible contiguous runs.
+    // A new run starts only when the gap between adjacent seats is > 1.
     const sequences: number[][] = []
-    let current: number[] = [allSeatNums[0]]
+    let current: number[] = [mergedSeats[0]]
 
-    for (let i = 1; i < allSeatNums.length; i++) {
-      if (allSeatNums[i] === allSeatNums[i - 1] + 1) {
-        current.push(allSeatNums[i])
+    for (let i = 1; i < mergedSeats.length; i++) {
+      if (mergedSeats[i] === mergedSeats[i - 1] + 1) {
+        current.push(mergedSeats[i])
       } else {
         sequences.push(current)
-        current = [allSeatNums[i]]
+        current = [mergedSeats[i]]
       }
     }
     sequences.push(current)
 
+    console.log("[REBUILD]", {
+      section,
+      row,
+      originalBlocks: group.length,
+      originalSeatSets: group.map((b) => b.seats.join(",")),
+      mergedSeats: mergedSeats.join(","),
+      reconstructedRuns: sequences.map((s) => `[${s[0]}–${s[s.length - 1]}] (${s.length})`),
+    })
+
+    // ── Step 4: emit one TicketBlock per run, using the lowest per-ticket price
     for (const seq of sequences) {
       const seats = seq.map(String)
 
-      // Best per-ticket across all seats in this run
       let bestPerTicket: number | null = null
       for (const n of seq) {
         const pt = seatPriceMap.get(n) ?? null
@@ -381,8 +392,6 @@ function consolidateSeatBlocks(blocks: TicketBlock[]): TicketBlock[] {
         }
       }
       const totalPrice = bestPerTicket !== null ? bestPerTicket * seq.length : null
-
-      console.log("CONSOLIDATED:", section, row, seats, "| $/ticket:", bestPerTicket)
 
       consolidated.push({
         section,
