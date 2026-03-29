@@ -1,4 +1,4 @@
-import { chromium } from "playwright"
+import { chromium, BrowserContext } from "playwright"
 
 type PriceMap = Record<string, number>
 
@@ -70,15 +70,11 @@ function isConsecutive(seats: string[]): boolean {
   return true
 }
 
-function buildTicketBlocksFromQuickpicks(
-  quickpicksData: unknown,
+function buildTicketBlocksFromPicks(
+  picks: unknown[],
   priceMap: PriceMap
 ): TicketBlock[] {
   const blocks: TicketBlock[] = []
-  if (!quickpicksData || typeof quickpicksData !== "object") return blocks
-
-  const data = quickpicksData as Record<string, any>
-  const picks = Array.isArray(data.picks) ? data.picks : []
 
   for (const rawPick of picks) {
     if (!rawPick || typeof rawPick !== "object") continue
@@ -136,6 +132,62 @@ function buildTicketBlocksFromQuickpicks(
   return blocks
 }
 
+async function fetchAllPicks(
+  context: BrowserContext,
+  firstUrl: string,
+  firstData: unknown,
+  headers: Record<string, string> | null
+): Promise<unknown[]> {
+  const firstDataObj = firstData as Record<string, any>
+  const allPicks: unknown[] = Array.isArray(firstDataObj.picks) ? [...firstDataObj.picks] : []
+
+  console.log("fetchAllPicks: seeded with first page picks:", allPicks.length)
+  console.log("fetchAllPicks: total field from first page:", firstDataObj.total)
+
+  const limit = 40
+  let offset = limit
+
+  while (true) {
+    console.log("Fetching offset:", offset)
+
+    const url = new URL(firstUrl)
+    url.searchParams.set("offset", offset.toString())
+    url.searchParams.set("limit", limit.toString())
+
+    if (headers) {
+      console.log("Sending headers:", JSON.stringify(headers))
+    }
+    const response = await context.request.get(url.toString(), { headers: headers ?? undefined })
+    console.log("Response status:", response.status(), "for offset:", offset)
+
+    if (!response.ok()) {
+      console.log("Non-OK response, stopping pagination")
+      break
+    }
+
+    const data = (await response.json()) as Record<string, any>
+    console.log("Received picks:", data.picks?.length)
+
+    if (!Array.isArray(data.picks) || data.picks.length === 0) {
+      console.log("No picks in response, stopping pagination")
+      break
+    }
+
+    allPicks.push(...data.picks)
+    console.log("Running total:", allPicks.length)
+
+    if (data.picks.length < limit) {
+      console.log("Last page reached (picks < limit)")
+      break
+    }
+
+    offset += limit
+  }
+
+  console.log("FINAL TOTAL PICKS:", allPicks.length)
+  return allPicks
+}
+
 async function waitForQuickpicks(
   getQuickpicks: () => unknown,
   timeoutMs: number
@@ -153,6 +205,8 @@ async function run() {
   const context = await browser.newContext()
   const page = await context.newPage()
   let quickpicksData: unknown = null
+  let quickpicksUrl: string | null = null
+  let quickpicksHeaders: Record<string, string> | null = null
 
   console.log("Opening page...")
 
@@ -169,6 +223,11 @@ async function run() {
 
       if (!quickpicksData && lowerUrl.includes("quickpicks")) {
         quickpicksData = data
+        quickpicksUrl = url
+        const reqHeaders = response.request().headers()
+        delete reqHeaders["content-length"]
+        delete reqHeaders["host"]
+        quickpicksHeaders = reqHeaders
         console.log(JSON.stringify(quickpicksData, null, 2).slice(0, 1000))
         const embedded = (quickpicksData as Record<string, any>)._embedded || {}
         console.log("EMBEDDED KEYS:", Object.keys(embedded))
@@ -184,7 +243,11 @@ async function run() {
   await waitForQuickpicks(() => quickpicksData, 5000)
 
   const priceMap = parseQuickpicksPriceMap(quickpicksData)
-  const ticketBlocks = buildTicketBlocksFromQuickpicks(quickpicksData, priceMap)
+  const allPicks =
+    quickpicksUrl && quickpicksData
+      ? await fetchAllPicks(context, quickpicksUrl, quickpicksData, quickpicksHeaders)
+      : []
+  const ticketBlocks = buildTicketBlocksFromPicks(allPicks, priceMap)
   console.log("Total parsed blocks:", ticketBlocks.length)
 
   if (ticketBlocks.length === 0) {
